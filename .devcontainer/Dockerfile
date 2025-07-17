@@ -5,7 +5,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        attr \
        autoconf \
-       automake \
        autopoint \
        bison \
        g++ \
@@ -23,6 +22,15 @@ RUN apt-get update \
        texinfo \
        valgrind \
     && rm -rf /var/lib/apt/lists/*
+
+# automake 1.18 is required, but 1.16 is the default in Ubuntu 24.04, so we need to install it from source
+RUN wget https://ftp.gnu.org/pub/gnu/automake/automake-1.18.1.tar.gz \
+    && tar -xzf automake-1.18.1.tar.gz \
+    && cd automake-1.18.1 \
+    && ./configure --prefix=/usr/local \
+    && make install \
+    && cd .. \
+    && rm -rf automake-1.18.1 automake-1.18.1.tar.gz
 
 # install dependencies for uutils
 RUN apt-get update \

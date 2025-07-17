@@ -1,5 +1,17 @@
 {
     "cSpell.import": [
         "./.vscode/cSpell.json"
-    ]
+    ],
+    "chat.tools.terminal.autoApprove": {
+        "cd": true,
+        "cargo": true,
+        "RUST_BACKTRACE=1": true,
+        "./target/debug/coreutils": true,
+        "echo": true,
+        "rustc": true,
+        "git log": true,
+        "git show": true,
+        "git status": true
+    },
+    "chat.agent.maxRequests": 200
 }
