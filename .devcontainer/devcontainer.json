@@ -31,6 +31,9 @@
             ],
             "settings": {
                 "rust-analyzer.check.command": "clippy",
+                "rust-analyzer.cargo.features": ["feat_os_unix"],
+                "rust-analyzer.check.features": ["feat_os_unix"],
+                "rust-analyzer.check.workspace": false,
                 "rust-analyzer.debug.engine": "ms-vscode.cpptools",
                 "rust-analyzer.debug.engineSettings": {
                     "cppdbg": {
