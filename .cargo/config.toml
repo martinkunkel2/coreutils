@@ -13,3 +13,4 @@ LIBSTDBUF_DIR = "/usr/local/libexec/coreutils"
 # https://github.com/rust-lang/rust/issues/82193
 [build]
 rustflags = ["-C", "target-feature=-crt-static"]
+jobs = 6
