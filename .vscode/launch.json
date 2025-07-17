@@ -1,0 +1,30 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "cppdbg",
+            "request": "launch",
+            "name": "My config",
+            "program": "${workspaceRoot}/target/debug/coreutils",
+            "args": [
+                "timeout",
+                "1000",
+                "-s",
+                "ALRM",
+                "sh",
+                "-c",
+                "trap 'echo child received TERM' TERM; sleep 500"
+            ],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "rust: cargo build",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": false
+                }
+            ],
+            "miDebuggerPath": "rust-gdb"
+        }
+    ]
+}

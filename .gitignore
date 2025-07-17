@@ -21,3 +21,11 @@ lib*.a
 
 ### direnv ###
 /.direnv/
+
+### Python ###
+__pycache__/
+*.py[cod]
+*$py.class
+
+/g
+/target-precommit/
