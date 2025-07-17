@@ -1,0 +1,11 @@
+# Requirements for GNU Test Artifact Analysis Tools
+
+# Core dependencies
+requests>=2.25.0
+
+# Optional dependencies for visualization
+matplotlib>=3.3.0
+seaborn>=0.11.0
+
+# For development/testing
+pytest>=6.0.0

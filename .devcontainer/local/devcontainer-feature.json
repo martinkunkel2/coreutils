@@ -1,0 +1,7 @@
+{
+    "id": "local",
+    "name": "Tools for this workspace",
+    "installsAfter": [
+        "ghcr.io/devcontainers/features/python"
+    ]
+}
