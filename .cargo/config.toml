@@ -10,3 +10,6 @@ linker = "aarch64-linux-gnu-gcc"
 [env]
 # See feat_external_libstdbuf in src/uu/stdbuf/Cargo.toml
 LIBSTDBUF_DIR = "/usr/local/libexec/coreutils"
+
+[build]
+jobs = 5
