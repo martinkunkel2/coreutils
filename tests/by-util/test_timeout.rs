@@ -7,6 +7,7 @@ use std::time::Duration;
 // spell-checker:ignore dont SIGALRM
 use rstest::rstest;
 
+use nix::sys::signal::Signal;
 use uucore::display::Quotable;
 use uutests::new_ucmd;
 
@@ -206,85 +207,84 @@ fn test_hex_timeout_ending_with_d() {
 }
 
 #[test]
-fn test_terminate_child_on_receiving_terminate() {
-    let mut timeout_cmd = new_ucmd!()
-        .args(&[
-            "10",
-            "sh",
+fn test_signal_handling() {
+    struct SignalTestCase {
+        signal_to_raise: Signal,
+        signal_option: Option<&'static str>,
+        expected_signal_at_child: &'static str,
+        expected_exit_code: i32,
+    }
+
+    let cases = [
+        SignalTestCase {
+            signal_to_raise: Signal::SIGTERM,
+            signal_option: None,
+            expected_signal_at_child: "TERM",
+            expected_exit_code: 143,
+        },
+        SignalTestCase {
+            signal_to_raise: Signal::SIGTERM,
+            signal_option: Some("SIGUSR1"),
+            expected_signal_at_child: "TERM",
+            expected_exit_code: 143,
+        },
+        SignalTestCase {
+            signal_to_raise: Signal::SIGALRM,
+            signal_option: None,
+            expected_signal_at_child: "TERM",
+            expected_exit_code: 124,
+        },
+        SignalTestCase {
+            signal_to_raise: Signal::SIGALRM,
+            signal_option: Some("SIGUSR1"),
+            expected_signal_at_child: "USR1",
+            expected_exit_code: 124,
+        },
+        SignalTestCase {
+            signal_to_raise: Signal::SIGINT,
+            signal_option: None,
+            expected_signal_at_child: "INT",
+            expected_exit_code: 128 + Signal::SIGINT as i32,
+        },
+        SignalTestCase {
+            signal_to_raise: Signal::SIGINT,
+            signal_option: Some("SIGUSR1"),
+            expected_signal_at_child: "USR1",
+            expected_exit_code: 128 + Signal::SIGINT as i32,
+        },
+    ];
+
+    for case in cases {
+        // Prepare the command arguments for timeout
+        let mut args = Vec::new();
+        if let Some(signal_option) = case.signal_option {
+            args.push("-s");
+            args.push(signal_option);
+        }
+        let trap_cmd = format!(
+            "trap 'echo child received expected signal' {} ; sleep 5",
+            case.expected_signal_at_child
+        );
+        args.extend([
+            "10", // timeout duration
+            "sh", // command to run
             "-c",
-            "trap 'echo child received TERM' TERM; sleep 5",
-        ])
-        .run_no_wait();
-    timeout_cmd.delay(100);
-    timeout_cmd.kill_with_custom_signal(nix::sys::signal::Signal::SIGTERM);
-    timeout_cmd
-        .make_assertion()
-        .is_not_alive()
-        .with_current_output()
-        .code_is(143)
-        .stdout_contains("child received TERM");
-}
+            trap_cmd.as_str(),
+        ]);
 
-#[test]
-fn test_receiving_alarm() {
-    let mut timeout_cmd = new_ucmd!().args(&["10", "sleep", "5"]).run_no_wait();
-    timeout_cmd.delay(100);
-    timeout_cmd.kill_with_custom_signal(nix::sys::signal::Signal::SIGALRM);
-    timeout_cmd
-        .make_assertion()
-        .is_not_alive()
-        .with_current_output()
-        .code_is(124);
-}
+        // Run the timeout command
+        let mut timeout_cmd = new_ucmd!().args(&args).run_no_wait();
 
-#[test]
-fn test_terminate_child_on_receiving_alarm() {
-    let mut timeout_cmd = new_ucmd!()
-        .args(&[
-            "10",
-            "sh",
-            "-c",
-            "trap 'echo child received TERM' TERM; sleep 5",
-        ])
-        .run_no_wait();
-    timeout_cmd.delay(100);
-    timeout_cmd.kill_with_custom_signal(nix::sys::signal::Signal::SIGALRM);
-    timeout_cmd
-        .make_assertion()
-        .is_not_alive()
-        .with_current_output()
-        .code_is(124)
-        .stdout_contains("child received TERM");
-}
+        // Send the signal to the timeout command
+        timeout_cmd.delay(100);
+        timeout_cmd.kill_with_custom_signal(case.signal_to_raise);
 
-#[test]
-fn test_receiving_int() {
-    let mut timeout_cmd = new_ucmd!().args(&["10", "sleep", "5"]).run_no_wait();
-    timeout_cmd.delay(100);
-    timeout_cmd.kill_with_custom_signal(nix::sys::signal::Signal::SIGINT);
-    timeout_cmd
-        .make_assertion()
-        .is_not_alive()
-        .with_current_output()
-        .code_is(128 + nix::sys::signal::Signal::SIGINT as i32);
-}
-
-#[test]
-fn test_terminate_child_on_receiving_int() {
-    let mut timeout_cmd = new_ucmd!()
-        .args(&[
-            "10",
-            "sh",
-            "-c",
-            "trap 'echo child received INT' INT; sleep 5",
-        ])
-        .run_no_wait();
-    timeout_cmd.delay(100);
-    timeout_cmd.kill_with_custom_signal(nix::sys::signal::Signal::SIGINT);
-    timeout_cmd
-        .make_assertion()
-        .is_not_alive()
-        .with_current_output()
-        .code_is(128 + nix::sys::signal::Signal::SIGINT as i32)
-        .stdout_contains("child received INT");
+        // Check result
+        timeout_cmd
+            .make_assertion()
+            .is_not_alive()
+            .with_current_output()
+            .code_is(case.expected_exit_code)
+            .stdout_contains("child received expected signal");
+    }
 }

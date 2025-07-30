@@ -42,7 +42,7 @@ pub mod options {
 struct Config {
     foreground: bool,
     kill_after: Option<Duration>,
-    signal: usize,
+    signal: Option<usize>,
     duration: Duration,
     preserve_status: bool,
     verbose: bool,
@@ -62,10 +62,10 @@ impl Config {
                             translate!("timeout-error-invalid-signal", "signal" => signal_.quote()),
                         ));
                     }
-                    Some(signal_value) => signal_value,
+                    Some(signal_value) => Some(signal_value),
                 }
             }
-            _ => signal_by_name_or_value("TERM").unwrap(),
+            _ => None,
         };
 
         let kill_after = match options.get_one::<String>(options::KILL_AFTER) {
@@ -301,7 +301,7 @@ fn preserve_signal_info(signal: libc::c_int) -> libc::c_int {
 fn timeout(
     cmd: &[String],
     duration: Duration,
-    mut signal: usize,
+    signal: Option<usize>,
     kill_after: Option<Duration>,
     foreground: bool,
     preserve_status: bool,
@@ -354,17 +354,26 @@ fn timeout(
         Ok(None) => {
             let signal_received = SIGNALED.load(atomic::Ordering::Relaxed);
 
-            // in case we stop the timeout due to a raised signal we overwrite the signal that is sent to the child
-            if signal_received != 0 {
-                // sent the same signal to the child
-                // except for SIGALRM, which has special handling
-                signal = match signal::Signal::try_from(signal_received).unwrap() {
-                    signal::Signal::SIGALRM => signal::Signal::SIGTERM as usize,
-                    _ => signal_received.try_into().unwrap(),
-                };
+            // we need to sent a signal to the child process
+            // default is SIGTERM
+            let mut signal_to_send = signal_by_name_or_value("TERM").unwrap();
+
+            // if we received SIGTERM, then we propagate SIGTERM
+            if signal_received == signal::Signal::SIGTERM as i32 {
+                signal_to_send = signal_received.try_into().unwrap();
             }
-            report_if_verbose(signal, &cmd[0], verbose);
-            send_signal(process, signal, foreground);
+            // if user configured a signal to be sent, we use that instead
+            else if let Some(signal) = signal {
+                signal_to_send = signal;
+            }
+            // if no signal was configured by the user and we received a signal, we propagate it
+            // but not for SIGALRM, in which we also send SIGTERM
+            else if signal_received != 0 && signal_received != signal::Signal::SIGALRM as i32 {
+                signal_to_send = signal_received.try_into().unwrap();
+            }
+
+            report_if_verbose(signal_to_send, &cmd[0], verbose);
+            send_signal(process, signal_to_send, foreground);
             match kill_after {
                 None => {
                     let status = process.wait()?;
@@ -411,7 +420,9 @@ fn timeout(
         Err(_) => {
             // We're going to return ERR_EXIT_STATUS regardless of
             // whether `send_signal()` succeeds or fails
-            send_signal(process, signal, foreground);
+            if let Some(signal) = signal {
+                send_signal(process, signal, foreground);
+            }
             Err(ExitStatus::TimeoutFailed.into())
         }
     }

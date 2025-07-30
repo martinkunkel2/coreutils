@@ -39,9 +39,6 @@
 = failed to set xattr of file =
 * tests/misc/xattr.sh
 
-= timeout returned 142. SIGALRM not handled? =
-* tests/misc/timeout-group.sh
-
 = FULL_PARTITION_TMPDIR not defined =
 * tests/misc/tac-continue.sh
 
