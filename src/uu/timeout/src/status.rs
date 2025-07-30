@@ -30,9 +30,6 @@ pub(crate) enum ExitStatus {
 
     /// When there is a failure while waiting for the child process to terminate.
     WaitingFailed,
-
-    /// When `SIGTERM` signal received.
-    Terminated,
 }
 
 impl From<ExitStatus> for i32 {
@@ -42,7 +39,6 @@ impl From<ExitStatus> for i32 {
             ExitStatus::TimeoutFailed => 125,
             ExitStatus::SignalSent(s) => 128 + s as Self,
             ExitStatus::WaitingFailed => 124,
-            ExitStatus::Terminated => 143,
         }
     }
 }

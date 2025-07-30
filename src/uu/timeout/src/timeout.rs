@@ -3,7 +3,7 @@
 // For the full copyright and license information, please view the LICENSE
 // file that was distributed with this source code.
 
-// spell-checker:ignore (ToDO) tstr sigstr cmdname setpgid sigchld getpid
+// spell-checker:ignore setpgid sigchld getpid SIGALRM ALRM
 mod status;
 
 use crate::status::ExitStatus;
@@ -11,7 +11,7 @@ use clap::{Arg, ArgAction, Command};
 use std::io::ErrorKind;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{self, Child, Stdio};
-use std::sync::atomic::{self, AtomicBool};
+use std::sync::atomic::{self, AtomicBool, AtomicUsize};
 use std::time::Duration;
 use uucore::display::Quotable;
 use uucore::error::{UResult, USimpleError, UUsageError};
@@ -42,7 +42,7 @@ pub mod options {
 struct Config {
     foreground: bool,
     kill_after: Option<Duration>,
-    signal: usize,
+    signal: Option<usize>,
     duration: Duration,
     preserve_status: bool,
     verbose: bool,
@@ -53,6 +53,7 @@ struct Config {
 impl Config {
     fn from(options: &clap::ArgMatches) -> UResult<Self> {
         let signal = match options.get_one::<String>(options::SIGNAL) {
+            None => None,
             Some(signal_) => {
                 let signal_result = signal_by_name_or_value(signal_);
                 match signal_result {
@@ -62,10 +63,9 @@ impl Config {
                             translate!("timeout-error-invalid-signal", "signal" => signal_.quote()),
                         ));
                     }
-                    Some(signal_value) => signal_value,
+                    Some(signal_value) => Some(signal_value),
                 }
             }
-            _ => signal_by_name_or_value("TERM").unwrap(),
         };
 
         let kill_after = match options.get_one::<String>(options::KILL_AFTER) {
@@ -187,21 +187,28 @@ fn unblock_sigchld() {
     }
 }
 
-/// We should terminate child process when receiving TERM signal.
+/// This flag is used to interrupt the waiting for the child process
 static SIGNALED: AtomicBool = AtomicBool::new(false);
+/// We store the last received signal here
+static SIGNAL_RECEIVED: AtomicUsize = AtomicUsize::new(0);
 
-fn catch_sigterm() {
+fn catch_signals() {
     use nix::sys::signal;
 
     extern "C" fn handle_sigterm(signal: libc::c_int) {
-        let signal = signal::Signal::try_from(signal).unwrap();
-        if signal == signal::Signal::SIGTERM {
-            SIGNALED.store(true, atomic::Ordering::Relaxed);
-        }
+        SIGNAL_RECEIVED.store(signal as usize, atomic::Ordering::Relaxed);
+        SIGNALED.store(true, atomic::Ordering::Relaxed);
     }
 
     let handler = signal::SigHandler::Handler(handle_sigterm);
-    unsafe { signal::signal(signal::Signal::SIGTERM, handler) }.unwrap();
+    let signals = [
+        signal::Signal::SIGTERM,
+        signal::Signal::SIGALRM,
+        signal::Signal::SIGINT,
+    ];
+    for signal in signals {
+        unsafe { signal::signal(signal, handler) }.unwrap();
+    }
 }
 
 /// Report that a signal is being sent if the verbose flag is set.
@@ -215,13 +222,45 @@ fn report_if_verbose(signal: usize, cmd: &str, verbose: bool) {
     }
 }
 
+/// Determine which signal to send to the child process based on:
+/// 1. Received SIGTERM (highest priority - always propagated)
+/// 2. User-configured signal
+/// 3. Other received signals (except SIGALRM)
+/// 4. Default SIGTERM
+fn determine_signal_to_send(signal_received: Option<usize>, user_signal: Option<usize>) -> usize {
+    // Default signal is SIGTERM
+    let default_signal = signal_by_name_or_value("TERM").unwrap();
+
+    // If we received SIGTERM, propagate SIGTERM (highest priority)
+    if let Some(signal) = signal_received {
+        if signal == signal_by_name_or_value("TERM").unwrap() {
+            return signal;
+        }
+    }
+
+    // If user configured a signal to be sent, use that
+    if let Some(signal) = user_signal {
+        return signal;
+    }
+
+    // If no signal was configured by the user and we received a signal, propagate it
+    // but not for SIGALRM, in which case we send SIGTERM
+    if let Some(signal) = signal_received {
+        if signal != signal_by_name_or_value("ALRM").unwrap() {
+            return signal;
+        }
+    }
+
+    // Default case: send SIGTERM
+    default_signal
+}
+
 fn send_signal(process: &mut Child, signal: usize, foreground: bool) {
     // NOTE: GNU timeout doesn't check for errors of signal.
     // The subprocess might have exited just after the timeout.
     // Sending a signal now would return "No such process", but we should still try to kill the children.
-    if foreground {
-        let _ = process.send_signal(signal);
-    } else {
+    let _ = process.send_signal(signal);
+    if !foreground {
         let _ = process.send_signal_group(signal);
         let kill_signal = signal_by_name_or_value("KILL").unwrap();
         let continued_signal = signal_by_name_or_value("CONT").unwrap();
@@ -229,6 +268,41 @@ fn send_signal(process: &mut Child, signal: usize, foreground: bool) {
             _ = process.send_signal_group(continued_signal);
         }
     }
+}
+
+/// Determine the exit status after a process has been waited on.
+/// This depends on three factors:
+/// - Whether to preserve the child's status
+/// - What signal was received that caused the timeout
+/// - The actual exit status of the child process
+fn determine_exit_status(
+    status: process::ExitStatus,
+    preserve_status: bool,
+    signal_received: Option<usize>,
+) -> UResult<()> {
+    if preserve_status {
+        // If the child exited normally, preserve its exit code
+        if let Some(ec) = status.code() {
+            return Err(ec.into());
+        }
+
+        // Process was terminated by signal, return signal exit status
+        if let Some(signal) = status.signal() {
+            return Err(ExitStatus::SignalSent(signal as usize).into());
+        }
+    }
+
+    // in case we stop the timeout due to alarm signal, the exit code is still preserved
+    if let Some(signal) = signal_received {
+        if signal != signal_by_name_or_value("ALRM").unwrap() {
+            return Err(status
+                .code()
+                .unwrap_or_else(|| status.signal().unwrap())
+                .into());
+        }
+    }
+
+    Err(ExitStatus::CommandTimedOut.into())
 }
 
 /// Wait for a child process and send a kill signal if it does not terminate.
@@ -258,14 +332,25 @@ fn wait_or_kill_process(
     preserve_status: bool,
     foreground: bool,
     verbose: bool,
+    signal_received: Option<usize>,
 ) -> std::io::Result<i32> {
     // ignore `SIGTERM` here
     match process.wait_or_timeout(duration, None) {
         Ok(Some(status)) => {
             if preserve_status {
-                Ok(status.code().unwrap_or_else(|| status.signal().unwrap()))
+                Ok(status
+                    .code()
+                    .unwrap_or_else(|| 128 + status.signal().unwrap()))
+            } else if let Some(signal) = signal_received {
+                if signal == signal_by_name_or_value("ALRM").unwrap() {
+                    Ok(ExitStatus::CommandTimedOut.into())
+                } else {
+                    // Same logic as determine_exit_status: when a signal was received
+                    // and it's not SIGALRM, preserve the child's exit code
+                    Ok(status.code().unwrap())
+                }
             } else {
-                Ok(ExitStatus::TimeoutFailed.into())
+                Ok(ExitStatus::CommandTimedOut.into())
             }
         }
         Ok(None) => {
@@ -279,37 +364,11 @@ fn wait_or_kill_process(
     }
 }
 
-#[cfg(unix)]
-fn preserve_signal_info(signal: libc::c_int) -> libc::c_int {
-    // This is needed because timeout is expected to preserve the exit
-    // status of its child. It is not the case that utilities have a
-    // single simple exit code, that's an illusion some shells
-    // provide.  Instead exit status is really two numbers:
-    //
-    //  - An exit code if the program ran to completion
-    //
-    //  - A signal number if the program was terminated by a signal
-    //
-    // The easiest way to preserve the latter seems to be to kill
-    // ourselves with whatever signal our child exited with, which is
-    // what the following is intended to accomplish.
-    unsafe {
-        libc::kill(libc::getpid(), signal);
-    }
-    signal
-}
-
-#[cfg(not(unix))]
-fn preserve_signal_info(signal: libc::c_int) -> libc::c_int {
-    // Do nothing
-    signal
-}
-
 /// TODO: Improve exit codes, and make them consistent with the GNU Coreutils exit codes.
 fn timeout(
     cmd: &[String],
     duration: Duration,
-    signal: usize,
+    signal: Option<usize>,
     kill_after: Option<Duration>,
     foreground: bool,
     preserve_status: bool,
@@ -320,6 +379,10 @@ fn timeout(
     }
     #[cfg(unix)]
     enable_pipe_errors()?;
+
+    // Set up signal handling before spawning the child process.
+    catch_signals();
+    unblock_sigchld();
 
     let process = &mut process::Command::new(&cmd[0])
         .args(&cmd[1..])
@@ -340,8 +403,7 @@ fn timeout(
                 translate!("timeout-error-failed-to-execute-process", "error" => err),
             )
         })?;
-    unblock_sigchld();
-    catch_sigterm();
+
     // Wait for the child process for the specified time period.
     //
     // If the process exits within the specified time period (the
@@ -356,27 +418,21 @@ fn timeout(
     match process.wait_or_timeout(duration, Some(&SIGNALED)) {
         Ok(Some(status)) => Err(status
             .code()
-            .unwrap_or_else(|| preserve_signal_info(status.signal().unwrap()))
+            .unwrap_or_else(|| status.signal().unwrap())
             .into()),
         Ok(None) => {
-            report_if_verbose(signal, &cmd[0], verbose);
-            send_signal(process, signal, foreground);
+            let signal_received = match SIGNAL_RECEIVED.load(atomic::Ordering::Relaxed) {
+                0 => None,
+                sig => Some(sig),
+            };
+            let signal_to_send = determine_signal_to_send(signal_received, signal);
+
+            report_if_verbose(signal_to_send, &cmd[0], verbose);
+            send_signal(process, signal_to_send, foreground);
             match kill_after {
                 None => {
                     let status = process.wait()?;
-                    if SIGNALED.load(atomic::Ordering::Relaxed) {
-                        Err(ExitStatus::Terminated.into())
-                    } else if preserve_status {
-                        if let Some(ec) = status.code() {
-                            Err(ec.into())
-                        } else if let Some(sc) = status.signal() {
-                            Err(ExitStatus::SignalSent(sc.try_into().unwrap()).into())
-                        } else {
-                            Err(ExitStatus::CommandTimedOut.into())
-                        }
-                    } else {
-                        Err(ExitStatus::CommandTimedOut.into())
-                    }
+                    determine_exit_status(status, preserve_status, signal_received)
                 }
                 Some(kill_after) => {
                     match wait_or_kill_process(
@@ -386,6 +442,7 @@ fn timeout(
                         preserve_status,
                         foreground,
                         verbose,
+                        signal_received,
                     ) {
                         Ok(status) => Err(status.into()),
                         Err(e) => Err(USimpleError::new(
@@ -399,7 +456,9 @@ fn timeout(
         Err(_) => {
             // We're going to return ERR_EXIT_STATUS regardless of
             // whether `send_signal()` succeeds or fails
-            send_signal(process, signal, foreground);
+            if let Some(signal) = signal {
+                send_signal(process, signal, foreground);
+            }
             Err(ExitStatus::TimeoutFailed.into())
         }
     }

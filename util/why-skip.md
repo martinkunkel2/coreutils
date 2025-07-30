@@ -1,4 +1,4 @@
-# spell-checker:ignore epipe readdir restorecon SIGALRM capget bigtime rootfs enotsup
+# spell-checker:ignore epipe readdir restorecon capget bigtime rootfs enotsup
 
 = skipped test: breakpoint not hit =
 * tests/tail-2/inotify-race2.sh
@@ -38,9 +38,6 @@
 
 = failed to set xattr of file =
 * tests/misc/xattr.sh
-
-= timeout returned 142. SIGALRM not handled? =
-* tests/misc/timeout-group.sh
 
 = FULL_PARTITION_TMPDIR not defined =
 * tests/misc/tac-continue.sh

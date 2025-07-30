@@ -4,7 +4,7 @@ use std::time::Duration;
 //
 // For the full copyright and license information, please view the LICENSE
 // file that was distributed with this source code.
-// spell-checker:ignore dont
+// spell-checker:ignore dont SIGALRM
 use rstest::rstest;
 
 use uucore::display::Quotable;
@@ -107,6 +107,15 @@ fn test_preserve_status() {
 }
 
 #[test]
+fn test_preserve_status_custom_exit_code() {
+    for arg in ["-p", "--preserve-status"] {
+        new_ucmd!()
+            .args(&[arg, ".1", "sh", "-c", "trap 'exit 42' TERM; sleep 10"])
+            .fails_with_code(42);
+    }
+}
+
+#[test]
 fn test_preserve_status_even_when_send_signal() {
     // When sending CONT signal, process doesn't get killed or stopped.
     // So, expected result is success and code 0.
@@ -205,21 +214,125 @@ fn test_hex_timeout_ending_with_d() {
 }
 
 #[test]
-fn test_terminate_child_on_receiving_terminate() {
-    let mut timeout_cmd = new_ucmd!()
+fn test_kill_after() {
+    // Test that the `--kill-after` argument works as expected
+    new_ucmd!()
         .args(&[
-            "10",
+            "--kill-after",
+            "1",
+            "1",
             "sh",
             "-c",
-            "trap 'echo child received TERM' TERM; sleep 5",
+            "trap '' TERM; while true; do sleep 0.1; done", // ignore SIGTERM, loop forever
         ])
-        .run_no_wait();
-    timeout_cmd.delay(100);
-    timeout_cmd.kill_with_custom_signal(nix::sys::signal::Signal::SIGTERM);
-    timeout_cmd
-        .make_assertion()
-        .is_not_alive()
-        .with_current_output()
-        .code_is(143)
-        .stdout_contains("child received TERM");
+        .timeout(Duration::from_secs(5))
+        .fails_with_code(137);
+}
+
+#[test]
+fn test_signal_handling() {
+    use nix::sys::signal::Signal;
+
+    struct SignalTestCase {
+        signal_to_raise: Option<Signal>,
+        signal_option: Option<&'static str>,
+        expected_signal_at_child: &'static str,
+        expected_exit_code: i32,
+    }
+
+    // This is the exit code that the child process will use when it receives the expected signal
+    let child_exit_code = 42;
+
+    // Duration in seconds for the timeout command
+    let timeout_duration = 2;
+
+    // Test cases and expected outcomes
+    let cases = [
+        SignalTestCase {
+            signal_to_raise: None,
+            signal_option: None,
+            expected_signal_at_child: "TERM",
+            expected_exit_code: 124,
+        },
+        SignalTestCase {
+            signal_to_raise: None,
+            signal_option: Some("SIGUSR1"),
+            expected_signal_at_child: "USR1",
+            expected_exit_code: 124,
+        },
+        SignalTestCase {
+            signal_to_raise: Some(Signal::SIGTERM),
+            signal_option: None,
+            expected_signal_at_child: "TERM",
+            expected_exit_code: child_exit_code,
+        },
+        SignalTestCase {
+            signal_to_raise: Some(Signal::SIGTERM),
+            signal_option: Some("SIGUSR1"),
+            expected_signal_at_child: "TERM",
+            expected_exit_code: child_exit_code,
+        },
+        SignalTestCase {
+            signal_to_raise: Some(Signal::SIGALRM),
+            signal_option: None,
+            expected_signal_at_child: "TERM",
+            expected_exit_code: 124, // in case of SIGALRM, behavior is same as running into timeout
+        },
+        SignalTestCase {
+            signal_to_raise: Some(Signal::SIGALRM),
+            signal_option: Some("SIGUSR1"),
+            expected_signal_at_child: "USR1",
+            expected_exit_code: 124, // in case of SIGALRM, behavior is same as running into timeout
+        },
+        SignalTestCase {
+            signal_to_raise: Some(Signal::SIGINT),
+            signal_option: None,
+            expected_signal_at_child: "INT",
+            expected_exit_code: child_exit_code,
+        },
+        SignalTestCase {
+            signal_to_raise: Some(Signal::SIGINT),
+            signal_option: Some("SIGUSR1"),
+            expected_signal_at_child: "USR1",
+            expected_exit_code: child_exit_code,
+        },
+    ];
+
+    for case in cases {
+        // Prepare the command arguments for timeout
+        let mut args = Vec::new();
+        if let Some(signal_option) = case.signal_option {
+            args.push("-s");
+            args.push(signal_option);
+        }
+
+        let trap_cmd = format!(
+            "trap 'echo \"child received expected signal\"; exit {}' {}; sleep {}",
+            child_exit_code,
+            case.expected_signal_at_child,
+            timeout_duration + 2
+        );
+        let timeout_duration_str = timeout_duration.to_string();
+        args.extend([&timeout_duration_str, "sh", "-c", trap_cmd.as_str()]);
+
+        // Run the timeout command
+        let mut timeout_cmd = new_ucmd!().args(&args).run_no_wait();
+
+        // Send the signal to the timeout command
+        if let Some(signal) = case.signal_to_raise {
+            timeout_cmd.delay(100);
+            timeout_cmd.kill_with_custom_signal(signal);
+        } else {
+            // wait for timeout to occur
+            timeout_cmd.delay(1000 * (timeout_duration + 1));
+        }
+
+        // Check result
+        timeout_cmd
+            .make_assertion()
+            .is_not_alive()
+            .with_current_output()
+            .code_is(case.expected_exit_code)
+            .stdout_contains("child received expected signal");
+    }
 }
