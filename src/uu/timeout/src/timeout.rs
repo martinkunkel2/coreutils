@@ -193,6 +193,7 @@ fn catch_signals() {
     let handler = signal::SigHandler::Handler(handle_sigterm);
     unsafe { signal::signal(signal::Signal::SIGTERM, handler) }.unwrap();
     unsafe { signal::signal(signal::Signal::SIGALRM, handler) }.unwrap();
+    unsafe { signal::signal(signal::Signal::SIGINT, handler) }.unwrap();
 }
 
 /// Report that a signal is being sent if the verbose flag is set.
@@ -300,12 +301,14 @@ fn preserve_signal_info(signal: libc::c_int) -> libc::c_int {
 fn timeout(
     cmd: &[String],
     duration: Duration,
-    signal: usize,
+    mut signal: usize,
     kill_after: Option<Duration>,
     foreground: bool,
     preserve_status: bool,
     verbose: bool,
 ) -> UResult<()> {
+    use nix::sys::signal;
+
     if !foreground {
         unsafe { libc::setpgid(0, 0) };
     }
@@ -349,18 +352,31 @@ fn timeout(
             .unwrap_or_else(|| preserve_signal_info(status.signal().unwrap()))
             .into()),
         Ok(None) => {
+            let signal_received = SIGNALED.load(atomic::Ordering::Relaxed);
+
+            // in case we stop the timeout due to a raised signal we overwrite the signal that is sent to the child
+            if signal_received != 0 {
+                // sent the same signal to the child
+                // except for SIGALRM, which has special handling
+                signal = match signal::Signal::try_from(signal_received).unwrap() {
+                    signal::Signal::SIGALRM => signal::Signal::SIGTERM as usize,
+                    _ => signal_received.try_into().unwrap(),
+                };
+            }
             report_if_verbose(signal, &cmd[0], verbose);
             send_signal(process, signal, foreground);
             match kill_after {
                 None => {
                     let status = process.wait()?;
-                    let signal_received = SIGNALED.load(atomic::Ordering::Relaxed);
+                    // in case we stop the timeout due to a raised signal, the exit code is not preserved
                     if signal_received != 0 {
-                        match nix::sys::signal::Signal::try_from(signal_received).unwrap() {
-                            nix::sys::signal::Signal::SIGALRM => {
-                                Err(ExitStatus::CommandTimedOut.into())
+                        match signal::Signal::try_from(signal_received).unwrap() {
+                            signal::Signal::SIGTERM => Err(ExitStatus::Terminated.into()),
+                            signal::Signal::SIGALRM => Err(ExitStatus::CommandTimedOut.into()),
+                            _ => {
+                                Err(ExitStatus::SignalSent(signal_received.try_into().unwrap())
+                                    .into())
                             }
-                            _ => Err(ExitStatus::Terminated.into()),
                         }
                     } else if preserve_status {
                         if let Some(ec) = status.code() {
