@@ -14,7 +14,7 @@ use std::io;
 use std::process::Child;
 use std::process::ExitStatus;
 use std::sync::atomic;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI32;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -93,7 +93,7 @@ pub trait ChildExt {
     fn wait_or_timeout(
         &mut self,
         timeout: Duration,
-        signaled: Option<&AtomicBool>,
+        signaled: Option<&AtomicI32>,
     ) -> io::Result<Option<ExitStatus>>;
 }
 
@@ -121,7 +121,7 @@ impl ChildExt for Child {
     fn wait_or_timeout(
         &mut self,
         timeout: Duration,
-        signaled: Option<&AtomicBool>,
+        signaled: Option<&AtomicI32>,
     ) -> io::Result<Option<ExitStatus>> {
         if timeout == Duration::from_micros(0) {
             return self.wait().map(Some);
@@ -136,7 +136,7 @@ impl ChildExt for Child {
             }
 
             if start.elapsed() >= timeout
-                || signaled.is_some_and(|signaled| signaled.load(atomic::Ordering::Relaxed))
+                || signaled.is_some_and(|signaled| signaled.load(atomic::Ordering::Relaxed) != 0)
             {
                 break;
             }

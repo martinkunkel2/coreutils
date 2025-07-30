@@ -4,7 +4,7 @@ use std::time::Duration;
 //
 // For the full copyright and license information, please view the LICENSE
 // file that was distributed with this source code.
-// spell-checker:ignore dont
+// spell-checker:ignore dont SIGALRM
 use rstest::rstest;
 
 use uucore::display::Quotable;
@@ -222,5 +222,37 @@ fn test_terminate_child_on_receiving_terminate() {
         .is_not_alive()
         .with_current_output()
         .code_is(143)
+        .stdout_contains("child received TERM");
+}
+
+#[test]
+fn test_receiving_alarm() {
+    let mut timeout_cmd = new_ucmd!().args(&["10", "sleep", "5"]).run_no_wait();
+    timeout_cmd.delay(100);
+    timeout_cmd.kill_with_custom_signal(nix::sys::signal::Signal::SIGALRM);
+    timeout_cmd
+        .make_assertion()
+        .is_not_alive()
+        .with_current_output()
+        .code_is(124);
+}
+
+#[test]
+fn test_terminate_child_on_receiving_alarm() {
+    let mut timeout_cmd = new_ucmd!()
+        .args(&[
+            "10",
+            "sh",
+            "-c",
+            "trap 'echo child received TERM' TERM; sleep 5",
+        ])
+        .run_no_wait();
+    timeout_cmd.delay(100);
+    timeout_cmd.kill_with_custom_signal(nix::sys::signal::Signal::SIGALRM);
+    timeout_cmd
+        .make_assertion()
+        .is_not_alive()
+        .with_current_output()
+        .code_is(124)
         .stdout_contains("child received TERM");
 }

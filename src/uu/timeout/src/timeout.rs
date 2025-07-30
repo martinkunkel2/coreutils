@@ -3,7 +3,7 @@
 // For the full copyright and license information, please view the LICENSE
 // file that was distributed with this source code.
 
-// spell-checker:ignore (ToDO) tstr sigstr cmdname setpgid sigchld getpid
+// spell-checker:ignore setpgid sigchld getpid SIGALRM
 mod status;
 
 use crate::status::ExitStatus;
@@ -11,7 +11,7 @@ use clap::{Arg, ArgAction, Command};
 use std::io::ErrorKind;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{self, Child, Stdio};
-use std::sync::atomic::{self, AtomicBool};
+use std::sync::atomic::{self, AtomicI32};
 use std::time::Duration;
 use uucore::display::Quotable;
 use uucore::error::{UClapError, UResult, USimpleError, UUsageError};
@@ -181,20 +181,18 @@ fn unblock_sigchld() {
 }
 
 /// We should terminate child process when receiving TERM signal.
-static SIGNALED: AtomicBool = AtomicBool::new(false);
+static SIGNALED: AtomicI32 = AtomicI32::new(0);
 
-fn catch_sigterm() {
+fn catch_signals() {
     use nix::sys::signal;
 
     extern "C" fn handle_sigterm(signal: libc::c_int) {
-        let signal = signal::Signal::try_from(signal).unwrap();
-        if signal == signal::Signal::SIGTERM {
-            SIGNALED.store(true, atomic::Ordering::Relaxed);
-        }
+        SIGNALED.store(signal, atomic::Ordering::Relaxed);
     }
 
     let handler = signal::SigHandler::Handler(handle_sigterm);
     unsafe { signal::signal(signal::Signal::SIGTERM, handler) }.unwrap();
+    unsafe { signal::signal(signal::Signal::SIGALRM, handler) }.unwrap();
 }
 
 /// Report that a signal is being sent if the verbose flag is set.
@@ -313,7 +311,6 @@ fn timeout(
     }
     #[cfg(unix)]
     enable_pipe_errors()?;
-
     let process = &mut process::Command::new(&cmd[0])
         .args(&cmd[1..])
         .stdin(Stdio::inherit())
@@ -334,7 +331,7 @@ fn timeout(
             )
         })?;
     unblock_sigchld();
-    catch_sigterm();
+    catch_signals();
     // Wait for the child process for the specified time period.
     //
     // If the process exits within the specified time period (the
@@ -357,8 +354,14 @@ fn timeout(
             match kill_after {
                 None => {
                     let status = process.wait()?;
-                    if SIGNALED.load(atomic::Ordering::Relaxed) {
-                        Err(ExitStatus::Terminated.into())
+                    let signal_received = SIGNALED.load(atomic::Ordering::Relaxed);
+                    if signal_received != 0 {
+                        match nix::sys::signal::Signal::try_from(signal_received).unwrap() {
+                            nix::sys::signal::Signal::SIGALRM => {
+                                Err(ExitStatus::CommandTimedOut.into())
+                            }
+                            _ => Err(ExitStatus::Terminated.into()),
+                        }
                     } else if preserve_status {
                         if let Some(ec) = status.code() {
                             Err(ec.into())
