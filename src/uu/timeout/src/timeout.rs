@@ -53,6 +53,7 @@ struct Config {
 impl Config {
     fn from(options: &clap::ArgMatches) -> UResult<Self> {
         let signal = match options.get_one::<String>(options::SIGNAL) {
+            None => None,
             Some(signal_) => {
                 let signal_result = signal_by_name_or_value(signal_);
                 match signal_result {
@@ -65,7 +66,6 @@ impl Config {
                     Some(signal_value) => Some(signal_value),
                 }
             }
-            _ => None,
         };
 
         let kill_after = match options.get_one::<String>(options::KILL_AFTER) {
@@ -184,16 +184,14 @@ fn unblock_sigchld() {
 static SIGNALED: AtomicI32 = AtomicI32::new(0);
 
 fn catch_signals() {
-    use nix::sys::signal;
-
     extern "C" fn handle_sigterm(signal: libc::c_int) {
         SIGNALED.store(signal, atomic::Ordering::Relaxed);
     }
 
-    let handler = signal::SigHandler::Handler(handle_sigterm);
-    unsafe { signal::signal(signal::Signal::SIGTERM, handler) }.unwrap();
-    unsafe { signal::signal(signal::Signal::SIGALRM, handler) }.unwrap();
-    unsafe { signal::signal(signal::Signal::SIGINT, handler) }.unwrap();
+    let handler = nix::sys::signal::SigHandler::Handler(handle_sigterm);
+    unsafe { nix::sys::signal::signal(nix::sys::signal::Signal::SIGTERM, handler) }.unwrap();
+    unsafe { nix::sys::signal::signal(nix::sys::signal::Signal::SIGALRM, handler) }.unwrap();
+    unsafe { nix::sys::signal::signal(nix::sys::signal::Signal::SIGINT, handler) }.unwrap();
 }
 
 /// Report that a signal is being sent if the verbose flag is set.
@@ -214,6 +212,8 @@ fn send_signal(process: &mut Child, signal: usize, foreground: bool) {
     if foreground {
         let _ = process.send_signal(signal);
     } else {
+        let _ = process.send_signal(signal); // required for tests/timeout/timeout-group.sh but why?????
+
         let _ = process.send_signal_group(signal);
         let kill_signal = signal_by_name_or_value("KILL").unwrap();
         let continued_signal = signal_by_name_or_value("CONT").unwrap();
@@ -307,13 +307,15 @@ fn timeout(
     preserve_status: bool,
     verbose: bool,
 ) -> UResult<()> {
-    use nix::sys::signal;
-
     if !foreground {
         unsafe { libc::setpgid(0, 0) };
     }
     #[cfg(unix)]
     enable_pipe_errors()?;
+
+    unblock_sigchld();
+    catch_signals();
+
     let process = &mut process::Command::new(&cmd[0])
         .args(&cmd[1..])
         .stdin(Stdio::inherit())
@@ -333,8 +335,6 @@ fn timeout(
                 translate!("timeout-error-failed-to-execute-process", "error" => err),
             )
         })?;
-    unblock_sigchld();
-    catch_signals();
     // Wait for the child process for the specified time period.
     //
     // If the process exits within the specified time period (the
@@ -359,7 +359,7 @@ fn timeout(
             let mut signal_to_send = signal_by_name_or_value("TERM").unwrap();
 
             // if we received SIGTERM, then we propagate SIGTERM
-            if signal_received == signal::Signal::SIGTERM as i32 {
+            if signal_received == nix::sys::signal::Signal::SIGTERM as i32 {
                 signal_to_send = signal_received.try_into().unwrap();
             }
             // if user configured a signal to be sent, we use that instead
@@ -368,7 +368,9 @@ fn timeout(
             }
             // if no signal was configured by the user and we received a signal, we propagate it
             // but not for SIGALRM, in which we also send SIGTERM
-            else if signal_received != 0 && signal_received != signal::Signal::SIGALRM as i32 {
+            else if signal_received != 0
+                && signal_received != nix::sys::signal::Signal::SIGALRM as i32
+            {
                 signal_to_send = signal_received.try_into().unwrap();
             }
 
@@ -379,9 +381,11 @@ fn timeout(
                     let status = process.wait()?;
                     // in case we stop the timeout due to a raised signal, the exit code is not preserved
                     if signal_received != 0 {
-                        match signal::Signal::try_from(signal_received).unwrap() {
-                            signal::Signal::SIGTERM => Err(ExitStatus::Terminated.into()),
-                            signal::Signal::SIGALRM => Err(ExitStatus::CommandTimedOut.into()),
+                        match nix::sys::signal::Signal::try_from(signal_received).unwrap() {
+                            nix::sys::signal::Signal::SIGTERM => Err(ExitStatus::Terminated.into()),
+                            nix::sys::signal::Signal::SIGALRM => {
+                                Err(ExitStatus::CommandTimedOut.into())
+                            }
                             _ => {
                                 Err(ExitStatus::SignalSent(signal_received.try_into().unwrap())
                                     .into())
