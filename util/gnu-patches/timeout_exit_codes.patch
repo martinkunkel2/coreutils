@@ -1,0 +1,112 @@
+Index: gnu/tests/timeout/timeout.sh
+===================================================================
+--- gnu.orig/tests/timeout/timeout.sh
++++ gnu/tests/timeout/timeout.sh
+@@ -16,59 +16,94 @@
+ # You should have received a copy of the GNU General Public License
+ # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+-. "${srcdir=.}/tests/init.sh"; path_prepend_ ./src
++. "${srcdir=.}/tests/init.sh";
+ print_ver_ timeout
+ require_trap_signame_
+
+ # no timeout
+-timeout 10 true || fail=1
++echo "DEBUG: Testing basic timeout (line 24)"
++timeout 10 true || fail=10  # Line 24
+
+ # no timeout (suffix check)
+-timeout 1d true || fail=1
++echo "DEBUG: Testing timeout with suffix (line 27)"
++timeout 1d true || fail=11  # Line 27
+
+ # disabled timeout
+-timeout 0 true || fail=1
++echo "DEBUG: Testing disabled timeout (line 30)"
++timeout 0 true || fail=12   # Line 30
+
+ # exit status propagation
+-returns_ 2 timeout 10 sh -c 'exit 2' || fail=1
++echo "DEBUG: Testing exit status propagation (line 33)"
++returns_ 2 timeout 10 sh -c 'exit 2' || fail=13  # Line 33
+
+ # timeout
+-returns_ 124 timeout .1 sleep 10 || fail=1
++echo "DEBUG: Testing timeout with sleep (line 36)"
++returns_ 124 timeout .1 sleep 10 || fail=14      # Line 36
+
+ # exit status propagation even on timeout
+ # exit status should be 128+TERM
+-returns_ 124 timeout --preserve-status .1 sleep 10 && fail=1
++echo "DEBUG: Testing preserve-status (line 40)"
++returns_ 124 timeout --preserve-status .1 sleep 10 && fail=15  # Line 40
+
+ # kill delay. Note once the initial timeout triggers,
+ # the exit status will be 124 even if the command
+ # exits on its own accord.
+ # exit status should be 128+KILL
+-returns_ 124 timeout -s0 -k1 .1 sleep 10 && fail=1
++echo "DEBUG: Testing kill delay (line 46)"
++returns_ 124 timeout -s0 -k1 .1 sleep 10 && fail=16           # Line 44
+ # Ensure a consistent exit status with --foreground
+-returns_ 124 timeout --foreground -s0 -k1 .1 sleep 10 && fail=1
++echo "DEBUG: Testing foreground mode (line 48)"
++returns_ 124 timeout --foreground -s0 -k1 .1 sleep 10 && fail=17  # Line 46
+
+ # Ensure 'timeout' is immune to parent's SIGCHLD handler
+ # Use a subshell and an exec to work around a bug in FreeBSD 5.0 /bin/sh.
++echo "DEBUG: Testing SIGCHLD immunity (line 50-56)"
+ (
+   trap '' CHLD
+
+   exec timeout 10 true
+-) || fail=1
++) || fail=18  # Line 54
+
+ # Don't be confused when starting off with a child (Bug#9098).
++echo "DEBUG: Testing child process confusion (Bug#9098, line 58-61)"
+ out=$(sleep .1 & exec timeout .5 sh -c 'sleep 2; echo foo')
+ status=$?
+-test "$out" = "" && test $status = 124 || fail=1
++echo "DEBUG: out='$out', status=$status"
++test "$out" = "" && test $status = 124 || fail=19  # Line 61
+
+ # Verify --verbose output
++echo "DEBUG: Testing verbose output (line 64-73)"
+ cat > exp <<\EOF
+ timeout: sending signal EXIT to command 'sleep'
+ timeout: sending signal KILL to command 'sleep'
+ EOF
+ for opt in -v --verbose; do
++  echo "DEBUG: Testing with option: $opt"
+   timeout $opt -s0 -k .1 .1 sleep 10 2> errt
+-  sed '/^Killed/d' < errt > err || framework_failure_
+-  compare exp err || fail=1
++  sed '/^Killed/d' < errt > err || fail=20        # Line 70 (sed)
++  echo "DEBUG: Expected content:"
++  cat exp
++  echo "DEBUG: Actual content:"
++  cat err
++  compare exp err || fail=21                      # Line 73 (compare)
+ done
+
++echo "DEBUG: Final fail status: $fail"
++case $fail in
++  10) echo "FAILED: Basic timeout test (line 24)" ;;
++  11) echo "FAILED: Timeout with suffix test (line 27)" ;;
++  12) echo "FAILED: Disabled timeout test (line 30)" ;;
++  13) echo "FAILED: Exit status propagation test (line 33)" ;;
++  14) echo "FAILED: Timeout with sleep test (line 36)" ;;
++  15) echo "FAILED: Preserve-status test (line 40)" ;;
++  16) echo "FAILED: Kill delay test (line 46)" ;;
++  17) echo "FAILED: Foreground mode test (line 48)" ;;
++  18) echo "FAILED: SIGCHLD immunity test (line 54)" ;;
++  19) echo "FAILED: Child process confusion test (line 61)" ;;
++  20) echo "FAILED: sed command in verbose test (line 70)" ;;
++  21) echo "FAILED: compare command in verbose test (line 73)" ;;
++  0) echo "SUCCESS: All tests passed" ;;
++  *) echo "FAILED: Unknown failure code $fail" ;;
++esac
++
+ Exit $fail
