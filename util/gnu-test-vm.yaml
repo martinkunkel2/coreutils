@@ -1,0 +1,37 @@
+# https://github.com/lima-vm/lima/blob/master/templates/default.yaml
+minimumLimaVersion: 2.0.0
+
+base:
+- template:fedora.yaml
+
+firmware:
+  legacyBIOS: true
+
+provision:
+  # install packages for building and testing GNU Coreutils
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      dnf -y update
+      dnf -y install git autoconf autopoint bison texinfo gperf gcc gdb jq libacl-devel libattr-devel libcap-devel libselinux-devel attr rustup clang-devel texinfo-tex wget automake patch quilt
+  # install rust toolchain for user
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      rustup-init -y --default-toolchain stable
+  # configure SELinux
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+
+      # Ensure we're running in enforcing mode
+      setenforce 1
+
+      # Create test files with SELinux contexts for testing
+      mkdir -p /var/test_selinux
+      touch /var/test_selinux/test_file
+      chcon -t etc_t /var/test_selinux/test_file
+      ls -Z /var/test_selinux/test_file  # Verify context
