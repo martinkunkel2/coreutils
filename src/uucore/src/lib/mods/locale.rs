@@ -409,7 +409,7 @@ pub fn setup_localization(p: &str) -> Result<(), LocalizationError> {
     }
 }
 
-#[cfg(not(debug_assertions))]
+//#[cfg(not(debug_assertions))]
 fn resolve_locales_dir_from_exe_dir(exe_dir: &Path, p: &str) -> Option<PathBuf> {
     // 1. <bindir>/locales/<prog>
     let coreutils = exe_dir.join("locales").join(p);
@@ -436,6 +436,7 @@ fn resolve_locales_dir_from_exe_dir(exe_dir: &Path, p: &str) -> Option<PathBuf> 
 
 /// Helper function to get the locales directory based on the build configuration
 fn get_locales_dir(p: &str) -> Result<PathBuf, LocalizationError> {
+    /*
     #[cfg(debug_assertions)]
     {
         // During development, use the project's locales directory
@@ -462,8 +463,8 @@ fn get_locales_dir(p: &str) -> Result<PathBuf, LocalizationError> {
             fallback_dev_path.display()
         )))
     }
-
     #[cfg(not(debug_assertions))]
+    */
     {
         use std::env;
         // In release builds, look relative to executable

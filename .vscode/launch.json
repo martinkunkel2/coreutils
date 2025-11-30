@@ -5,25 +5,38 @@
             "type": "cppdbg",
             "request": "launch",
             "name": "My config",
-            "program": "${workspaceRoot}/target/debug/coreutils",
+            "program": "/workspaces/coreutils/target/pseudo-install/bin/pseudo",
             "args": [
-                "timeout",
-                "--kill-after",
-                "1",
-                "1",
-                "sh",
-                "-c",
-                "trap '' TERM; while true; do sleep 0.1; done"
+                "/workspaces/coreutils/target/install-debug/usr/local/bin/ls",
+                "--version",
             ],
-            "cwd": "${workspaceFolder}",
-            "preLaunchTask": "rust: cargo build",
-            "setupCommands": [
+            "environment": [
                 {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": false
+                    "name": "PSEUDO_PREFIX",
+                    "value": "/workspaces/coreutils/target/pseudo-install"
+                },
+                {
+                    "name": "LD_LIBRARY_PATH",
+                    "value": "/workspaces/coreutils/target/pseudo-install/lib64"
                 }
             ],
+            "cwd": "${workspaceFolder}",
+            "setupCommands": [
+                {
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": false
+                },
+                {
+                    "text": "set follow-fork-mode child",
+                    "ignoreFailures": false
+                },
+                {
+                    "text": "set detach-on-fork off",
+                    "ignoreFailures": false
+                }
+
+            ],
+            "stopAtEntry": false,
             "miDebuggerPath": "rust-gdb"
         }
     ]
