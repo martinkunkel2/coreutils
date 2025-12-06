@@ -226,7 +226,16 @@ pub fn uu_app() -> Command {
 }
 
 fn parse_mode(str_mode: &str) -> Result<mode_t, String> {
-    uucore::mode::parse_mode(str_mode)
+    #[cfg(all(
+        not(target_os = "freebsd"),
+        not(target_vendor = "apple"),
+        not(target_os = "android")
+    ))]
+    let default_permissions = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH;
+    #[cfg(any(target_os = "freebsd", target_vendor = "apple", target_os = "android"))]
+    let default_permissions = (S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH) as u32;
+
+    uucore::mode::parse(default_permissions, Some(str_mode), true, None)
         .map_err(|e| {
             translate!(
                 "mknod-error-invalid-mode",

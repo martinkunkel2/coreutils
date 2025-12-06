@@ -49,29 +49,10 @@ pub struct Config<'a> {
     pub context: Option<&'a String>,
 }
 
-#[cfg(windows)]
-fn get_mode(_matches: &ArgMatches) -> Result<u32, String> {
-    Ok(DEFAULT_PERM)
-}
-
-#[cfg(not(windows))]
 fn get_mode(matches: &ArgMatches) -> Result<u32, String> {
-    // Not tested on Windows
-    let mut new_mode = DEFAULT_PERM;
-
-    if let Some(m) = matches.get_one::<String>(options::MODE) {
-        for mode in m.split(',') {
-            if mode.chars().any(|c| c.is_ascii_digit()) {
-                new_mode = mode::parse_numeric(new_mode, m, true)?;
-            } else {
-                new_mode = mode::parse_symbolic(new_mode, mode, mode::get_umask(), true)?;
-            }
-        }
-        Ok(new_mode)
-    } else {
-        // If no mode argument is specified return the mode derived from umask
-        Ok(!mode::get_umask() & 0o0777)
-    }
+    let mode_arg = matches.get_one::<String>(options::MODE);
+    let new_mode = uucore::mode::parse(DEFAULT_PERM, mode_arg.map(|x| x.as_str()), true, None)?;
+    Ok(new_mode)
 }
 
 #[uucore::main]
