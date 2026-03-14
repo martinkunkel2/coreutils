@@ -451,7 +451,12 @@ fn timeout(
 
             let status = process.wait()?;
             if is_external_signal {
-                Err(ExitStatus::SignalSent(received_sig as usize).into())
+                let exit_code = status.code().unwrap_or_else(|| {
+                    status
+                        .signal()
+                        .map_or_else(|| ExitStatus::TimeoutFailed.into(), preserve_signal_info)
+                });
+                Err(exit_code.into())
             } else if SIGNALED.load(atomic::Ordering::Relaxed) {
                 Err(ExitStatus::CommandTimedOut.into())
             } else if preserve_status {
